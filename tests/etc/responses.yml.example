@@ -21,6 +21,16 @@ juniper:
   cmd_response_final: 'archive size 120k files 3'
   commit_comment: 'Unit test on commit with comment'
 
+juniper_screenos:
+  base_prompt: "ssg5-serial-"
+  router_prompt: "ssg5-serial->"
+  enable_prompt: "ssg5-serial->"
+  interface_ip: 100.65.1.1
+  multiple_line_output: 'Total Config size'
+  version_banner: 'Version: 6.3.0.1.0.0.0.0'
+  cmd_response_init: ""
+  cmd_response_final: 'set alias test'
+
 paloalto_panos:
   base_prompt: ntc@pa1
   router_prompt: ntc@pa1>
@@ -197,3 +207,29 @@ cloudgenix_ion:
   interface_ip: "192.168.1.16/24"
   cmd_response_init: "172.16.16.15/24"
   cmd_response_final: "172.16.16.16/24"
+
+keymile:
+  base_prompt: /
+  router_prompt: /> 
+  enable_prompt: /> 
+  interface_ip: 1.2.3.4
+  version_banner: "---===### CLI Release R2A21, Build 2018-12-21 ###===---"
+  multiple_line_output: "Equipment State"
+
+keymile_nos:
+  base_prompt: KDKB1251
+  router_prompt: KDKB1251> 
+  enable_prompt: KDKB1251# 
+  interface_ip: 1.2.3.5 
+  version_banner: "NOS version 2.09 #0001"
+  multiple_line_output: "Interface br328"
+
+ruijie_os:
+  base_prompt: Ruijie
+  router_prompt : Ruijie>
+  enable_prompt: Ruijie#
+  interface_ip: 172.30.31.101
+  version_banner: "Ruijie Networks"
+  multiple_line_output: ""
+  file_check_cmd: "logging buffered 8880"
+  save_config: 'OK'

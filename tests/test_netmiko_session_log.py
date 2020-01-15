@@ -1,6 +1,4 @@
 #!/usr/bin/env python
-from __future__ import print_function
-from __future__ import unicode_literals
 import time
 import hashlib
 import io
@@ -17,7 +15,7 @@ def calc_md5(file_name=None, contents=None):
     else:
         raise ValueError("Most specify either file_name or contents")
 
-    return hashlib.md5(contents).hexdigest()
+    return hashlib.md5(contents.strip()).hexdigest()
 
 
 def read_session_log(session_file, append=False):
@@ -72,7 +70,7 @@ def test_session_log_write(net_connect_slog_wr, commands, expected_responses):
     session_action(net_connect_slog_wr, command)
 
     compare_file = expected_responses["compare_log_wr"]
-    session_file = expected_responses["session_log"]
+    session_file = expected_responses["session_log_wr"]
     session_log_md5(session_file, compare_file)
 
 
@@ -112,3 +110,21 @@ def test_session_log_bytesio(device_slog, commands, expected_responses):
     log_content = s_log.getvalue()
     session_log_md5 = calc_md5(contents=log_content)
     assert session_log_md5 == compare_log_md5
+
+
+def test_session_log_secrets(device_slog):
+    """Verify session_log does not contain password or secret."""
+    conn = ConnectHandler(**device_slog)
+    conn._write_session_log("\nTesting password and secret replacement\n")
+    conn._write_session_log("This is my password {}\n".format(conn.password))
+    conn._write_session_log("This is my secret {}\n".format(conn.secret))
+
+    if not isinstance(conn.session_log, io.BufferedIOBase):
+        with open(conn.session_log.name, "r") as f:
+            session_log = f.read()
+        if conn.password:
+            assert conn.password not in session_log
+        if conn.secret:
+            assert conn.secret not in session_log
+    else:
+        assert True

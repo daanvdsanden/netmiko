@@ -1,10 +1,18 @@
-from __future__ import print_function
-from __future__ import unicode_literals
 import re
 import time
 import socket
+from os import path
+from paramiko import SSHClient
 from netmiko.cisco_base_connection import CiscoSSHConnection
 from netmiko import log
+
+
+class SSHClient_noauth(SSHClient):
+    """Set noauth when manually handling SSH authentication."""
+
+    def _auth(self, username, *args):
+        self._transport.auth_none(username)
+        return
 
 
 class HPProcurveBase(CiscoSSHConnection):
@@ -32,19 +40,39 @@ class HPProcurveBase(CiscoSSHConnection):
         default_username="manager",
     ):
         """Enter enable mode"""
+        delay_factor = self.select_delay_factor(delay_factor=0)
         if self.check_enable_mode():
             return ""
-        output = self.send_command_timing(cmd)
-        if (
-            "username" in output.lower()
-            or "login name" in output.lower()
-            or "user name" in output.lower()
-        ):
-            output += self.send_command_timing(default_username)
-        if "password" in output.lower():
-            output += self.send_command_timing(self.secret)
-        log.debug("{}".format(output))
+
+        output = ""
+        i = 1
+        max_attempts = 5
+        while i <= max_attempts:
+            self.write_channel(cmd + self.RETURN)
+            time.sleep(0.3 * delay_factor)
+            new_output = self.read_channel()
+            username_pattern = r"(username|login|user name)"
+            if re.search(username_pattern, new_output, flags=re_flags):
+                output += new_output
+                new_output = self.send_command_timing(default_username)
+            if re.search(pattern, new_output, flags=re_flags):
+                output += new_output
+                self.write_channel(self.normalize_cmd(self.secret))
+                new_output = self._read_channel_timing()
+                if self.check_enable_mode():
+                    output += new_output
+                    return output
+            output += new_output
+            i += 1
+
+        log.debug(f"{output}")
         self.clear_buffer()
+        msg = (
+            "Failed to enter enable mode. Please ensure you pass "
+            "the 'secret' argument to ConnectHandler."
+        )
+        if not self.check_enable_mode():
+            raise ValueError(msg)
         return output
 
     def cleanup(self):
@@ -71,7 +99,7 @@ class HPProcurveBase(CiscoSSHConnection):
 
     def save_config(self, cmd="write memory", confirm=False, confirm_response=""):
         """Save Config."""
-        return super(HPProcurveBase, self).save_config(
+        return super().save_config(
             cmd=cmd, confirm=confirm, confirm_response=confirm_response
         )
 
@@ -97,7 +125,26 @@ class HPProcurveSSH(HPProcurveBase):
         # Try one last time to past "Press any key to continue
         self.write_channel(self.RETURN)
 
-        super(HPProcurveSSH, self).session_preparation()
+        super().session_preparation()
+
+    def _build_ssh_client(self):
+        """Allow passwordless authentication for HP devices being provisioned."""
+
+        # Create instance of SSHClient object. If no SSH keys and no password, then use noauth
+        if not self.use_keys and not self.password:
+            remote_conn_pre = SSHClient_noauth()
+        else:
+            remote_conn_pre = SSHClient()
+
+        # Load host_keys for better SSH security
+        if self.system_host_keys:
+            remote_conn_pre.load_system_host_keys()
+        if self.alt_host_keys and path.isfile(self.alt_key_file):
+            remote_conn_pre.load_host_keys(self.alt_key_file)
+
+        # Default is to automatically add untrusted hosts (make sure appropriate for your env)
+        remote_conn_pre.set_missing_host_key_policy(self.key_policy)
+        return remote_conn_pre
 
 
 class HPProcurveTelnet(HPProcurveBase):
@@ -111,7 +158,7 @@ class HPProcurveTelnet(HPProcurveBase):
         max_loops=60,
     ):
         """Telnet login: can be username/password or just password."""
-        super(HPProcurveTelnet, self).telnet_login(
+        super().telnet_login(
             pri_prompt_terminator=pri_prompt_terminator,
             alt_prompt_terminator=alt_prompt_terminator,
             username_pattern=username_pattern,
