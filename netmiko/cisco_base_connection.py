@@ -1,12 +1,16 @@
 """CiscoBaseConnection is netmiko SSH class for Cisco and Cisco-like platforms."""
-from netmiko.base_connection import BaseConnection
+from netmiko.base_connection import (
+    BaseConnection,
+    AbstractConfigMode,
+    AbstractEnableMode,
+)
 from netmiko.scp_handler import BaseFileTransfer
 from netmiko.ssh_exception import NetmikoAuthenticationException
 import re
 import time
 
 
-class CiscoBaseConnection(BaseConnection):
+class CiscoBaseConnection(AbstractConfigMode, AbstractEnableMode):
     """Base Class for cisco-like behavior."""
 
     def check_enable_mode(self, check_string="#"):
@@ -218,6 +222,19 @@ class CiscoBaseConnection(BaseConnection):
                 command_string=cmd, strip_prompt=False, strip_command=False
             )
         return output
+
+    def disable_paging(self, command="terminal length 0", delay_factor=1):
+        return super().disable_paging(command=command, delay_factor=delay_factor)
+
+    def set_base_prompt(
+        self, pri_prompt_terminator="#", alt_prompt_terminator=">", delay_factor=1
+    ):
+        return super().set_base_prompt(
+            pri_prompt_terminator=pri_prompt_terminator,
+            alt_prompt_terminator=alt_prompt_terminator,
+            delay_factpr=delay_factor,
+        )
+
 
 
 class CiscoSSHConnection(CiscoBaseConnection):

@@ -11,6 +11,7 @@ import re
 import socket
 import telnetlib
 import time
+import abc
 from collections import deque
 from os import path
 from threading import Lock
@@ -32,11 +33,11 @@ from netmiko.utilities import (
 )
 
 
-class BaseConnection(object):
+class AbstractBaseConnection(abc.ABC):
     """
-    Defines vendor independent methods.
-
-    Otherwise method left as a stub method.
+    Defines vendor independent methods. Like connection setup, logging, timing and procedures
+    
+    Methods that need overriding are defined as abstract methods. This class cannot be initiated only its subclasses
     """
 
     def __init__(
@@ -995,8 +996,9 @@ class BaseConnection(object):
         """Handler for devices like WLC, Extreme ERS that throw up characters prior to login."""
         pass
 
-    def disable_paging(self, command="terminal length 0", delay_factor=1):
-        """Disable paging default to a Cisco CLI method.
+    @abc.abstractmethod
+    def disable_paging(self, *, command, delay_factor=1):
+        """Disable paging.
 
         :param command: Device command to disable pagination of output
         :type command: str
@@ -1038,8 +1040,9 @@ class BaseConnection(object):
         output = self.read_until_pattern(pattern=re.escape(command.strip()))
         return output
 
+    @abc.abstractmethod
     def set_base_prompt(
-        self, pri_prompt_terminator="#", alt_prompt_terminator=">", delay_factor=1
+        self, *, pri_prompt_terminator, alt_prompt_terminator, delay_factor=1
     ):
         """Sets self.base_prompt
 
@@ -1503,119 +1506,6 @@ class BaseConnection(object):
         command += self.RETURN
         return command
 
-    def check_enable_mode(self, check_string=""):
-        """Check if in enable mode. Return boolean.
-
-        :param check_string: Identification of privilege mode from device
-        :type check_string: str
-        """
-        self.write_channel(self.RETURN)
-        output = self.read_until_prompt()
-        return check_string in output
-
-    def enable(self, cmd="", pattern="ssword", re_flags=re.IGNORECASE):
-        """Enter enable mode.
-
-        :param cmd: Device command to enter enable mode
-        :type cmd: str
-
-        :param pattern: pattern to search for indicating device is waiting for password
-        :type pattern: str
-
-        :param re_flags: Regular expression flags used in conjunction with pattern
-        :type re_flags: int
-        """
-        output = ""
-        msg = (
-            "Failed to enter enable mode. Please ensure you pass "
-            "the 'secret' argument to ConnectHandler."
-        )
-        if not self.check_enable_mode():
-            self.write_channel(self.normalize_cmd(cmd))
-            try:
-                output += self.read_until_prompt_or_pattern(
-                    pattern=pattern, re_flags=re_flags
-                )
-                self.write_channel(self.normalize_cmd(self.secret))
-                output += self.read_until_prompt()
-            except NetmikoTimeoutException:
-                raise ValueError(msg)
-            if not self.check_enable_mode():
-                raise ValueError(msg)
-        return output
-
-    def exit_enable_mode(self, exit_command=""):
-        """Exit enable mode.
-
-        :param exit_command: Command that exits the session from privileged mode
-        :type exit_command: str
-        """
-        output = ""
-        if self.check_enable_mode():
-            self.write_channel(self.normalize_cmd(exit_command))
-            output += self.read_until_prompt()
-            if self.check_enable_mode():
-                raise ValueError("Failed to exit enable mode.")
-        return output
-
-    def check_config_mode(self, check_string="", pattern=""):
-        """Checks if the device is in configuration mode or not.
-
-        :param check_string: Identification of configuration mode from the device
-        :type check_string: str
-
-        :param pattern: Pattern to terminate reading of channel
-        :type pattern: str
-        """
-        self.write_channel(self.RETURN)
-        # You can encounter an issue here (on router name changes) prefer delay-based solution
-        if not pattern:
-            output = self._read_channel_timing()
-        else:
-            output = self.read_until_pattern(pattern=pattern)
-        return check_string in output
-
-    def config_mode(self, config_command="", pattern=""):
-        """Enter into config_mode.
-
-        :param config_command: Configuration command to send to the device
-        :type config_command: str
-
-        :param pattern: Pattern to terminate reading of channel
-        :type pattern: str
-        """
-        output = ""
-        if not self.check_config_mode():
-            self.write_channel(self.normalize_cmd(config_command))
-            # Make sure you read until you detect the command echo (avoid getting out of sync)
-            output += self.read_until_pattern(pattern=re.escape(config_command.strip()))
-            if not re.search(pattern, output, flags=re.M):
-                output += self.read_until_pattern(pattern=pattern)
-            if not self.check_config_mode():
-                raise ValueError("Failed to enter configuration mode.")
-        return output
-
-    def exit_config_mode(self, exit_config="", pattern=""):
-        """Exit from configuration mode.
-
-        :param exit_config: Command to exit configuration mode
-        :type exit_config: str
-
-        :param pattern: Pattern to terminate reading of channel
-        :type pattern: str
-        """
-        output = ""
-        if self.check_config_mode():
-            self.write_channel(self.normalize_cmd(exit_config))
-            # Make sure you read until you detect the command echo (avoid getting out of sync)
-            output += self.read_until_pattern(pattern=re.escape(exit_config.strip()))
-            if not re.search(pattern, output, flags=re.M):
-                output += self.read_until_pattern(pattern=pattern)
-            if self.check_config_mode():
-                raise ValueError("Failed to exit configuration mode")
-        log.debug(f"exit_config_mode: {output}")
-        return output
-
     def send_config_from_file(self, config_file=None, **kwargs):
         """
         Send configuration commands down the SSH channel from a file.
@@ -1637,14 +1527,11 @@ class BaseConnection(object):
     def send_config_set(
         self,
         config_commands=None,
-        exit_config_mode=True,
         delay_factor=1,
         max_loops=150,
         strip_prompt=False,
         strip_command=False,
-        config_mode_command=None,
         cmd_verify=True,
-        enter_config_mode=True,
     ):
         """
         Send configuration commands down the SSH channel.
@@ -1656,9 +1543,6 @@ class BaseConnection(object):
 
         :param config_commands: Multiple configuration commands to be sent to the device
         :type config_commands: list or string
-
-        :param exit_config_mode: Determines whether or not to exit config mode after complete
-        :type exit_config_mode: bool
 
         :param delay_factor: Factor to adjust delays
         :type delay_factor: int
@@ -1672,14 +1556,8 @@ class BaseConnection(object):
         :param strip_command: Determines whether or not to strip the command
         :type strip_command: bool
 
-        :param config_mode_command: The command to enter into config mode
-        :type config_mode_command: str
-
         :param cmd_verify: Whether or not to verify command echo for each command in config_set
         :type cmd_verify: bool
-
-        :param enter_config_mode: Do you enter config mode before sending config commands
-        :type exit_config_mode: bool
 
         """
         delay_factor = self.select_delay_factor(delay_factor)
@@ -1690,11 +1568,6 @@ class BaseConnection(object):
 
         if not hasattr(config_commands, "__iter__"):
             raise ValueError("Invalid argument passed into send_config_set")
-
-        # Send config commands
-        if enter_config_mode:
-            cfg_mode_args = (config_mode_command,) if config_mode_command else tuple()
-            output = self.config_mode(*cfg_mode_args)
 
         if self.fast_cli:
             for cmd in config_commands:
@@ -1728,8 +1601,6 @@ class BaseConnection(object):
                     new_output = self.read_until_pattern(pattern=pattern)
                     output += new_output
 
-        if exit_config_mode:
-            output += self.exit_config_mode()
         output = self._sanitize_output(output)
         log.debug(f"{output}")
         return output
@@ -1854,14 +1725,6 @@ class BaseConnection(object):
             self.remote_conn = None
             self.close_session_log()
 
-    def commit(self):
-        """Commit method for platforms that support this."""
-        raise AttributeError("Network device does not support 'commit()' method")
-
-    def save_config(self, *args, **kwargs):
-        """Not Implemented"""
-        raise NotImplementedError
-
     def open_session_log(self, filename, mode="write"):
         """Open the session_log file."""
         if mode == "append":
@@ -1875,6 +1738,249 @@ class BaseConnection(object):
         if self.session_log is not None and self._session_log_close:
             self.session_log.close()
             self.session_log = None
+
+
+class AbstractConfigMode(AbstractBaseConnection):
+    """
+    Defines vendor independent configure mode methods. Functions for entering and leaving configure mode
+    
+    All function are abstract since the commands are not known.
+    """
+
+    @abc.abstractmethod
+    def check_config_mode(self, *, check_string, pattern):
+        """Checks if the device is in configuration mode or not.
+
+        :param check_string: Identification of configuration mode from the device
+        :type check_string: str
+
+        :param pattern: Pattern to terminate reading of channel
+        :type pattern: str
+        """
+        self.write_channel(self.RETURN)
+        # You can encounter an issue here (on router name changes) prefer delay-based solution
+        if not pattern:
+            output = self._read_channel_timing()
+        else:
+            output = self.read_until_pattern(pattern=pattern)
+        return check_string in output
+
+    @abc.abstractmethod
+    def config_mode(self, *, config_command, pattern):
+        """Enter into config_mode.
+
+        :param config_command: Configuration command to send to the device
+        :type config_command: str
+
+        :param pattern: Pattern to terminate reading of channel
+        :type pattern: str
+        """
+        output = ""
+        if not self.check_config_mode():
+            self.write_channel(self.normalize_cmd(config_command))
+            # Make sure you read until you detect the command echo (avoid getting out of sync)
+            output += self.read_until_pattern(pattern=re.escape(config_command.strip()))
+            if not re.search(pattern, output, flags=re.M):
+                output += self.read_until_pattern(pattern=pattern)
+            if not self.check_config_mode():
+                raise ValueError("Failed to enter configuration mode.")
+        return output
+
+    @abc.abstractmethod
+    def exit_config_mode(self, *, exit_config, pattern):
+        """Exit from configuration mode.
+
+        :param exit_config: Command to exit configuration mode
+        :type exit_config: str
+
+        :param pattern: Pattern to terminate reading of channel
+        :type pattern: str
+        """
+        output = ""
+        if self.check_config_mode():
+            self.write_channel(self.normalize_cmd(exit_config))
+            # Make sure you read until you detect the command echo (avoid getting out of sync)
+            output += self.read_until_pattern(pattern=re.escape(exit_config.strip()))
+            if not re.search(pattern, output, flags=re.M):
+                output += self.read_until_pattern(pattern=pattern)
+            if self.check_config_mode():
+                raise ValueError("Failed to exit configuration mode")
+        log.debug(f"exit_config_mode: {output}")
+        return output
+
+    def send_config_set(
+        self,
+        config_commands=None,
+        exit_config_mode=True,
+        delay_factor=1,
+        max_loops=150,
+        strip_prompt=False,
+        strip_command=False,
+        config_mode_command=None,
+        cmd_verify=True,
+        enter_config_mode=True,
+    ):
+        """
+        Send configuration commands down the SSH channel.
+
+        config_commands is an iterable containing all of the configuration commands.
+        The commands will be executed one after the other.
+
+        Automatically exits/enters configuration mode.
+
+        :param config_commands: Multiple configuration commands to be sent to the device
+        :type config_commands: list or string
+
+        :param exit_config_mode: Determines whether or not to exit config mode after complete
+        :type exit_config_mode: bool
+
+        :param delay_factor: Factor to adjust delays
+        :type delay_factor: int
+
+        :param max_loops: Controls wait time in conjunction with delay_factor (default: 150)
+        :type max_loops: int
+
+        :param strip_prompt: Determines whether or not to strip the prompt
+        :type strip_prompt: bool
+
+        :param strip_command: Determines whether or not to strip the command
+        :type strip_command: bool
+
+        :param config_mode_command: The command to enter into config mode
+        :type config_mode_command: str
+
+        :param cmd_verify: Whether or not to verify command echo for each command in config_set
+        :type cmd_verify: bool
+
+        :param enter_config_mode: Do you enter config mode before sending config commands
+        :type exit_config_mode: bool
+
+        """
+        # Send config commands
+        if enter_config_mode:
+            cfg_mode_args = (config_mode_command,) if config_mode_command else tuple()
+            output = self.config_mode(*cfg_mode_args)
+
+        output = super().send_config_set(
+            config_commands=config_command,
+            delay_factor=delay_factor,
+            max_loops=max_loops,
+            strip_prompt=strip_prompt,
+            strip_command=strip_command,
+            cmd_verify=cmd_verify,
+        )
+
+        if exit_config_mode:
+            output += self.exit_config_mode()
+
+        return output
+
+
+
+class AbstractEnableMode(AbstractBaseConnection):
+    @abc.abstractmethod
+    def check_enable_mode(self, *, check_string):
+        """Check if in enable mode. Return boolean.
+
+        :param check_string: Identification of privilege mode from device
+        :type check_string: str
+        """
+        self.write_channel(self.RETURN)
+        output = self.read_until_prompt()
+        return check_string in output
+
+    @abc.abstractmethod
+    def enable(self, *, cmd, pattern, re_flags=re.IGNORECASE):
+        """Enter enable mode.
+
+        :param cmd: Device command to enter enable mode
+        :type cmd: str
+
+        :param pattern: pattern to search for indicating device is waiting for password
+        :type pattern: str
+
+        :param re_flags: Regular expression flags used in conjunction with pattern
+        :type re_flags: int
+        """
+        output = ""
+        msg = (
+            "Failed to enter enable mode. Please ensure you pass "
+            "the 'secret' argument to ConnectHandler."
+        )
+        if not self.check_enable_mode():
+            self.write_channel(self.normalize_cmd(cmd))
+            try:
+                output += self.read_until_prompt_or_pattern(
+                    pattern=pattern, re_flags=re_flags
+                )
+                self.write_channel(self.normalize_cmd(self.secret))
+                output += self.read_until_prompt()
+            except NetmikoTimeoutException:
+                raise ValueError(msg)
+            if not self.check_enable_mode():
+                raise ValueError(msg)
+        return output
+
+    @abc.abstractmethod
+    def exit_enable_mode(self, *, exit_command):
+        """Exit enable mode.
+
+        :param exit_command: Command that exits the session from privileged mode
+        :type exit_command: str
+        """
+        output = ""
+        if self.check_enable_mode():
+            self.write_channel(self.normalize_cmd(exit_command))
+            output += self.read_until_prompt()
+            if self.check_enable_mode():
+                raise ValueError("Failed to exit enable mode.")
+        return output
+
+
+class BaseConnection(AbstractEnableMode, AbstractConfigMode):
+    """
+    Defines vendor independent methods.
+
+    Otherwise method left as a stub method.
+    """
+
+    def check_config_mode(self, check_string="", pattern=""):
+        return super().check_config_mode(check_string=check_string, pattern=pattern)
+
+    def config_mode(self, config_command="", pattern=""):
+        return super().config_mode(config_command=config_command, pattern=pattern)
+
+    def exit_config_mode(exit_config="", pattern=""):
+        return super().exit_config_mode(exit_config=exit_config, pattern=pattern)
+
+    def check_enable_mode(check_string=""):
+        return super().check_enable_mode(check_string=check_string)
+
+    def enable(self, cmd="", pattern="ssword", re_flags=re.IGNORECASE):
+        return super().enable(cmd=cmd, pattern=pattern, re_flags=re_flags)
+
+    def exit_enable_mode(self, exit_command=""):
+        return super().exit_enable_mode(exit_command=exit_command)
+
+    def disable_paging(self, command="terminal length 0", delay_factor=1):
+        return super().disable_paging(command=command, delay_factor=delay_factor)
+
+    def set_base_prompt(
+        self, pri_prompt_terminator="#", alt_prompt_terminator=">", delay_factor=1
+    ):
+        return super().set_base_prompt(
+            pri_prompt_terminator=pri_prompt_terminator,
+            alt_prompt_terminator=alt_prompt_terminator,
+            delay_factpr=delay_factor,
+        )
+
+    def commit(self):
+        """Commit method for platforms that support this."""
+        raise AttributeError("Network device does not support 'commit()' method")
+
+    def save_config(self, *args, **kwargs):
+        """Not Implemented"""
+        raise NotImplementedError
 
 
 class TelnetConnection(BaseConnection):
